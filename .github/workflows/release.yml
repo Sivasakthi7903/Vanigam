@@ -1,0 +1,53 @@
+name: Signed Android release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Prepare private signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'Configure release signing secrets first'; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.p12"
+      - name: Set update repository and version
+        run: |
+          python3 - <<'PY'
+          import os,re,pathlib
+          version=os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          if not re.fullmatch(r'\d{1,3}\.\d{1,3}\.\d{1,3}',version): raise SystemExit('Use vMAJOR.MINOR.PATCH')
+          major,minor,patch=map(int,version.split('.')); code=major*1000000+minor*1000+patch
+          if code<=2 or code>2100000000: raise SystemExit('Version code out of range')
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write(f'RELEASE_VERSION={version}\nRELEASE_CODE={code}\n')
+          p=pathlib.Path('app/src/main/java/com/vanigam/clothing/Updater.java')
+          p.write_text(re.sub(r'public static final String DEFAULT_REPO="[^"]*";',f'public static final String DEFAULT_REPO="{os.environ["GITHUB_REPOSITORY"]}";',p.read_text()))
+          PY
+      - name: Build signed update
+        env:
+          SIGNING_KEYSTORE: ${{ runner.temp }}/release.p12
+          SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          SIGNING_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: gradle --no-daemon :app:assembleRelease -PappVersionName="$RELEASE_VERSION" -PappVersionCode="$RELEASE_CODE"
+      - name: Publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "Vanigam-Clothing-v${RELEASE_VERSION}.apk"
+          gh release create "$GITHUB_REF_NAME" "Vanigam-Clothing-v${RELEASE_VERSION}.apk" --verify-tag --title "Vanigam Clothing ${RELEASE_VERSION}" --generate-notes
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.p12"

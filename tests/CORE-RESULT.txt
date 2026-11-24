@@ -1,0 +1,1 @@
+PASS 47 core/auth/stock/payment/points/report/backup checks

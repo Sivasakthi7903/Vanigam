@@ -1,0 +1,1 @@
+PASS 28 DOM render/search/change/loyalty/dialog checks (not visual or native Android tests)
